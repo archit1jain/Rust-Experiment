@@ -2,15 +2,25 @@ use crate::stats::Stats;
 use serde::Serialize;
 use serde_json;
 
+// This module is responsible for formatting and displaying the calculated statistics.
+// It converts the raw numbers into a human-readable format or a computer-readable format (JSON),
+// depending on what the user requested.
+
+// A trait is essentially a contract describing what something can do.
+// By creating a `Reporter` trait, we guarantee that any struct implementing it will have a `report` method.
+// This allows us to easily swap out how we print statistics without changing the core analysis code.
 /// A trait defining how a reporter should output statistics.
 /// This allows us to easily swap between different output formats.
 pub trait Reporter {
+    // `&self` means the method borrows the reporter immutably.
+    // `&mut stats` means it borrows the `Stats` object mutably (so it can modify it, e.g., by sorting arrays inside it).
     fn report(&self, stats: &mut Stats, top_n: usize, errors_only: bool);
 }
 
 /// A reporter that prints a human-readable table to the console.
 pub struct ConsoleReporter;
 
+// Here we implement the `Reporter` trait contract for our `ConsoleReporter`.
 impl Reporter for ConsoleReporter {
     fn report(&self, stats: &mut Stats, top_n: usize, errors_only: bool) {
         if !errors_only {
@@ -33,7 +43,11 @@ impl Reporter for ConsoleReporter {
 
             println!("HTTP Methods:");
             println!("────────────────────────");
+            // `iter()` creates an iterator over the key-value pairs in the HashMap.
+            // `collect()` gathers all these pairs into a new `Vec`. We do this because HashMaps have no order, but we want to sort them.
             let mut methods: Vec<_> = stats.method_counts.iter().collect();
+            // `sort_by` takes a closure (a small, anonymous function).
+            // `|a, b|` defines the parameters the closure receives. It compares the counts (the second element, `.1`) to sort in descending order.
             methods.sort_by(|a, b| b.1.cmp(a.1));
             for (method, count) in methods {
                 println!("{:<8} {}", method, count);
@@ -44,7 +58,10 @@ impl Reporter for ConsoleReporter {
             println!("────────────────────────");
             let mut endpoints: Vec<_> = stats.endpoint_counts.iter().collect();
             endpoints.sort_by(|a, b| b.1.cmp(a.1));
+            // `into_iter()` consumes the `endpoints` Vec, giving us ownership of its elements.
+            // `take(top_n)` limits the iterator to yield only the first `top_n` items.
             for (endpoint, count) in endpoints.into_iter().take(top_n) {
+                // `get()` returns an `Option`. If the endpoint isn't found (which shouldn't happen here), `unwrap_or(&0)` provides a safe default of 0.
                 let avg_latency = stats.endpoint_latencies.get(endpoint).unwrap_or(&0) / count;
                 println!("{:<20} {} (avg: {}ms)", endpoint, count, avg_latency);
             }
@@ -65,6 +82,8 @@ impl Reporter for ConsoleReporter {
 
 /// A struct used for JSON serialization.
 /// We map the fields from our internal `Stats` structure to this one.
+// `#[derive(Serialize)]` tells the `serde` crate to automatically write code that can turn this struct into JSON format.
+// The `'a` is a lifetime annotation. It tells the Rust compiler: "The HashMaps this struct borrows must live at least as long as this JsonReport object itself."
 #[derive(Serialize)]
 struct JsonReport<'a> {
     total_requests: u64,
@@ -86,10 +105,13 @@ struct JsonReport<'a> {
 /// A reporter that outputs statistics as a JSON string.
 pub struct JsonReporter;
 
+// Implement the `Reporter` trait for JSON output.
 impl Reporter for JsonReporter {
     fn report(&self, stats: &mut Stats, _top_n: usize, _errors_only: bool) {
+        // Calculate the latencies first.
         let (min, max, avg, p50, p95, p99) = calculate_latency_metrics(stats);
 
+        // Build the `JsonReport` struct, borrowing the HashMaps directly from the `stats` object to avoid unnecessary copying.
         let report = JsonReport {
             total_requests: stats.total_requests,
             status_2xx: stats.status_2xx,
@@ -108,6 +130,7 @@ impl Reporter for JsonReporter {
         };
 
         // Serialize the report to a formatted JSON string and print it.
+        // `to_string_pretty` returns a `Result`. `if let Ok(json)` is a concise way to say: "If this succeeded and returned `Ok`, assign the value to `json` and run the block."
         if let Ok(json) = serde_json::to_string_pretty(&report) {
             println!("{}", json);
         }
@@ -115,24 +138,30 @@ impl Reporter for JsonReporter {
 }
 
 /// Helper function to calculate latencies from the Stats struct.
+// This function takes a mutable borrow of `Stats` because it needs to sort the internal `latencies` vector.
 fn calculate_latency_metrics(stats: &mut Stats) -> (u64, u64, u64, u64, u64, u64) {
     if stats.latencies.is_empty() {
         return (0, 0, 0, 0, 0, 0);
     }
 
     // Sort latencies to find min, max and percentiles.
+    // `sort_unstable` modifies the vector in place. This is why we needed a mutable borrow (`&mut stats`).
     stats.latencies.sort_unstable();
 
     let len = stats.latencies.len();
     let min = stats.latencies[0];
     let max = stats.latencies[len - 1];
 
+    // Compute the sum using an iterator.
+    // `.iter()` produces the values, and `.sum()` consumes them to add them all up.
     let sum: u64 = stats.latencies.iter().sum();
     let avg = sum / len as u64;
 
+    // Calculate percentiles by accessing the vector at specific calculated indices.
     let p50 = stats.latencies[(len as f64 * 0.50) as usize];
     let p95 = stats.latencies[(len as f64 * 0.95) as usize];
     let p99 = stats.latencies[(len as f64 * 0.99) as usize];
 
+    // Return the results as a tuple.
     (min, max, avg, p50, p95, p99)
 }
